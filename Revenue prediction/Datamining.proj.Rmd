@@ -35,6 +35,9 @@ master_data$num_prod_comp <-(master_data$production_company_1!="")+(master_data$
 master_data$num_prod_ctry <-(master_data$production_country_1!="")+(master_data$production_country_2!="")+
                             (master_data$production_country_3!="")
 
+library(lubridate)
+master_data$release_month <- month.abb[month(master_data$release_date)]
+
 master_data <- master_data[ , -which(names(master_data) %in% 
               c( "movie_id" ,"actor_1_name","actor_2_name","actor_3_name","actor_4_name","actor_5_name","director_name","producer_name",
                  "casting_gender","casting_name","belongs_to_collection","genre_2","genre_3","genre_4","production_company_1",
@@ -123,12 +126,12 @@ mode_impute <-  function(x){
   return(x)
 }
 
-#Imputing missing values for gender (Actor 1 & 2) and budget. Dropping other columns with more than 15% missing values 
+data.imp <-data
 
-data.imp <- data[,-c(3,4,5,6,7)]
+#Imputing missing data in gender and runtime columns using mode and median respectively
 
-data.imp$actor_1_gender <- as.factor(mode_impute(data.imp$actor_1_gender))
-data.imp$actor_2_gender <- as.factor(mode_impute(data.imp$actor_2_gender))
+data.imp$actor_1_gender <- as.factor(mode_impute(data$actor_1_gender))
+data.imp$actor_2_gender <- as.factor(mode_impute(data$actor_2_gender))
 data.imp$runtime <- median_impute(data.imp$runtime)
 
 perc_blank <- function(x){
@@ -136,31 +139,18 @@ perc_blank <- function(x){
 }
 round(apply(data.imp, 2, function(x) perc_blank(x)),2)
 
-#data.forest <- data.imp[!is.na(data.imp$budget),]
-#library(randomForest)
-
-#rfor.impute <-randomForest(budget~ revenue + actor_1_gender+actor_2_gender+popularity +release_date + runtime +vote_average + vote_count 
-#                           +collection+num_prod_comp, data = data.forest)
 ```
 
-```{r}
-#Impute the missing budget values: Not needed now
-
-data.imp$budget[is.na(data.imp$budget)] <- predict(rfor.impute,data.imp[is.na(data.imp$budget),] )
-
-plot(density(data.imp$budget),col="red")
-lines(density(data.forest$budget),col="blue")
-lines(density(median_impute(data$budget)),col="black")
-
-hist(log(data.imp$budget))
-```
-
-
+Removing the extreme revenue records
 ```{r}
 sd.budget <- sqrt(var(data.imp$budget))
 sd.budget*6
 length(data.imp$budget[data.imp$budget>2e+08])
-data.final <-data.imp[,-which(names(data.imp) %in% c('na_count', 'genre_1', 'adult','tagline','original_language','release_date'))]
+data.imp <- data.imp[data.imp$budget<2e+08,]
+```
+
+```{r}
+data.final <-data.imp[,-which(names(data.imp) %in% c( "actor_2_gender", "actor_3_gender", "actor_4_gender", "actor_5_gender",  "director_gender", "producer_gender", 'na_count', 'genre_1', 'adult','tagline','original_language'))]
 data.final$success <- ifelse(data.final$revenue>1.25*(data.final$budget),1,0)
 
 #Splitting the data into test & train
@@ -181,15 +171,14 @@ for (i in c("budget","popularity","runtime", "vote_average", "vote_count")){
   plot(data.final$revenue, eval(parse(text = paste0("data.final$",i))), ylab = i)
 }
 ```
-Cleary vote count has an increasing relationship with revenue as that indicates # people who went to watch the movie
+
+Cleary vote count has an increasing relationship with revenue as that indicates # people who went to watch the movie. But I cannot model vote average and vote count for predicting revenue as they are collected after the movie is released
 
 **Fitting a linear model**
 ```{r}
 
-revenue_pred <- lm(revenue~ actor_1_gender+ actor_2_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data = train)
+revenue_pred <- lm(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data = train)
 summary(revenue_pred)
-
-#cor(predict(revenue_pred, test), test$revenue)
 
 library(Metrics)
 
@@ -200,13 +189,17 @@ rmseTrain <-rmse((predict(revenue_pred, train)),train$revenue)
 cbind(rmseTrain, rmseTest)
 ```
 
+The linear model does not five a good fit and the resons could be:
++ interaction between variables e.g.: popularity is driven by actors, budget is driven by runtime- number of countries in which the movie is launched
++ Scatter plots do not show a perfect linear relationship between the dependent and independent variables
 
 **Fitting a regression tree model**
+to take into account the interactions between variables
 ```{r}
 library(rpart)
 library(rpart.plot)
 
-revenue_tree <- rpart(revenue~ actor_1_gender+ actor_2_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data = train)
+revenue_tree <- rpart(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget , data = train)
 
 plotcp(revenue_tree)
 
@@ -221,12 +214,12 @@ revenue_tree_opt <- prune(tree = revenue_tree,
 rpart.plot(x = revenue_tree_opt, yesno = 2, type = 1, extra = 1)
 ```
 
-Looking at the accuracy and confusion matrix of from tree model (test vs. train)
+Looking at the accuracy and confusion matrix from tree model (test vs. train)
 ```{r}
 
 predictedTest <- predict(revenue_tree_opt, test)
 rmseTest <- rmse((test$revenue),predictedTest)
-rmseTrain <- rmse((train$revenue),predictedTrain)
+rmseTrain <- rmse((train$revenue),predict(revenue_tree_opt, train))
 
 r_sqTest <- 1-rmseTest^2/var(test$revenue)
 r_sqTr <- 1-rmseTrain^2/var(train$revenue)
@@ -238,13 +231,14 @@ a
 
 ```
 
+The fit of regression tree is similar to the linear regression model. I will fit random forests to see if the accuracy can be improved further by bootstrapping: 
+
 ```{r}
 library(randomForest)
-rfor1 <- randomForest(revenue~ actor_1_gender+ actor_2_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data= train)
+rfor1 <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data= train)
 ```
 
 ```{r}
-names(rfor1)
 rfor1
 rmseTest <- rmse(predict(rfor1, test), test$revenue)
 rmseTrain <- rmse(predict(rfor1, train), train$revenue)
@@ -260,19 +254,27 @@ a
 
 I see overfitting in this model. Let me set the node size to avoid this:
 ```{r}
-(rfor1$importance)
+for (i in c(20,25,30,35,40)){
 
-rfor2 <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data= train, nodesize = 30)
-rmseTest <- rmse(predict(rfor2, test), test$revenue)
-rmseTrain <- rmse(predict(rfor2, train), train$revenue)
-Rsq_test <- 1-(rmseTest)^2/var(test$revenue)
-R_sqTr <- 1-(rmseTrain)^2/var(train$revenue)
+  rfor2 <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data= train, nodesize = i)
+  rmseTest <- rmse(predict(rfor2, test), test$revenue)
+  rmseTrain <- rmse(predict(rfor2, train), train$revenue)
+  Rsq_test <- 1-(rmseTest)^2/var(test$revenue)
+  R_sqTr <- 1-(rmseTrain)^2/var(train$revenue)
+  
+  a<- round(rbind(cbind(rmseTrain, rmseTest), cbind(R_sqTr, Rsq_test)),2)
+  rownames(a)<- c("RMSE", "R-sq")
+  colnames(a)<- c("Train", "Test")
+  print(i)
+  print(a)
+}
+```
 
-a<- round(rbind(cbind(rmseTrain, rmseTest), cbind(R_sqTr, Rsq_test)),2)
-rownames(a)<- c("RMSE", "R-sq")
-colnames(a)<- c("Train", "Test")
-a
+I will go with the node size 25. The model fit has clearly improved with random forests compared to the tree model
 
+```{r}
+rfor.f <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data= train, nodesize = 25)
+rfor.f$importance
 ```
 
 **Performing cluster wise class regression**
@@ -316,14 +318,6 @@ clustreg=function(dat,k,tries,sed,niter){
   return(list(data=dat,nclust=k,tries=tries,seed=sed,rsq.best=rsq.best,number.loops=niter, Best.try=l.best,cluster=c.best,results=res))
 }
 
-rev_clust <- clustreg(train[,c(5,1,2,3,4,6,9,10,11)],5,100,881,50)
-table(rev_clust$cluster)
-
-rev_clust$results
-
-```
-
-```{r}
 clustreg.predict=function(results,newdat){
   
   yhat=rep(NA,nrow(newdat))
@@ -341,79 +335,65 @@ clustreg.predict=function(results,newdat){
   return(list(results=results,newdata=newdat,cluster=c,yhat=yhat,rsq=rsq))
   
 }
+```
 
-testp <- clustreg.predict(rev_clust, test[,c(5,1,2,3,4,6,9,10,11)])
+Trying multiple clusters and assessing fits using approximated R-sq and RMSE
+```{r}
 
-rmseTest <- rmse(testp$yhat , test$revenue)
-rmseTrain <- rmse(clustreg.predict(rev_clust, train[,c(5,1,2,3,4,6,9,10,11)])$yhat, train$revenue)
-Rsq_test <- 1-(rmseTest)^2/var(test$revenue)
-R_sqTr <- 1-(rmseTrain)^2/var(train$revenue)
+for (i in 2:4){
+  
+  rev_clust<- clustreg(train[,c(5,1,2,3,6,9,10,11)],i,100,881,50)
+  ypredTr<- clustreg.predict(rev_clust, train[,c(5,1,2,3,6,9,10,11)])
+  ypredTest <- clustreg.predict(rev_clust,test[,c(5,1,2,3,6,9,10,11)])
+  yhat_tr<- ypredTr$yhat
+  yhat_test<- ypredTest$yhat
+  
+  rmseTest <- rmse(yhat_test, test$revenue)
+  rmseTrain <- rmse(yhat_tr, train$revenue)
+  Rsq_test <- 1-(rmseTest)^2/var(test$revenue)
+  R_sqTr <- 1-(rmseTrain)^2/var(train$revenue)
+  
+  a<- round(rbind(cbind(rmseTrain, rmseTest), cbind(R_sqTr, Rsq_test)),2)
+  rownames(a)<- c("RMSE", "R-sq")
+  colnames(a)<- c("Train", "Test")
+  print(i)
+  x <- table(rev_clust$cluster)
+  print(x)
+  print(a)
+  
+}
 
-a<- round(rbind(cbind(rmseTrain, rmseTest), cbind(R_sqTr, Rsq_test)),2)
-rownames(a)<- c("RMSE", "R-sq")
-colnames(a)<- c("Train", "Test")
-a
+```
 
+Cluster wise regression is fitting really well. Based on the size of the clusters, I will choose the 3 cluster solution and clusters get thin beyond that.
+
+```{r}
+rev_clust3<- clustreg(train[,c(5,1,2,3,6,9,10,11)],3,100,881,50)
+rev_clust3$result
 ```
  
 ```{r}
-train_clus <- as.data.frame(cbind(train, cluster = rev_clust$cluster))
-cbind(aggregate(train_clus[,c(5,3,4,6,10,11)], by = list(train_clus$cluster), mean), size = table(train_clus$cluster))
-
-colnames(train_clus)
+train_clus <- as.data.frame(cbind(train, cluster = rev_clust3$cluster))
+train_clus$cluster <- as.factor(train_clus$cluster)
+cbind(aggregate(train_clus[,c(2,5,3,6,7,8,10)], by = list(train_clus$cluster), mean), size = table(train_clus$cluster))
 ```
 
-
-
+Fitting a classification tree on train data to classify new datasets into clusters for revenue predictions through clusterwise regression results 
 ```{r}
-rev_clust4 <- clustreg(train[,c(5,1,2,3,4,6,9,10,11)],4,100,881,50)
-table(rev_clust4$cluster)
+s <- sample(1:nrow(train), round(0.7*nrow(train),0))
+train1 <- train_clus[s,]
+train2 <- train_clus[-s,]
 
-rev_clust4$results
-
-testp <- clustreg.predict(rev_clust4, test[,c(5,1,2,3,4,6,9,10,11)])
-
-rmseTest <- rmse(testp$yhat , test$revenue)
-rmseTrain <- rmse(clustreg.predict(rev_clust4, train[,c(5,1,2,3,4,6,9,10,11)])$yhat, train$revenue)
-Rsq_test <- 1-(rmseTest)^2/var(test$revenue)
-R_sqTr <- 1-(rmseTrain)^2/var(train$revenue)
-
-a<- round(rbind(cbind(rmseTrain, rmseTest), cbind(R_sqTr, Rsq_test)),2)
-rownames(a)<- c("RMSE", "R-sq")
-colnames(a)<- c("Train", "Test")
-a
-
-train_clus4 <- as.data.frame(cbind(train, cluster = rev_clust4$cluster))
-cbind(aggregate(train_clus4[,c(5,3,4,6,10,11)], by = list(train_clus4$cluster), mean), size = table(train_clus4$cluster))
-
+  classify <- randomForest(cluster~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data= train1, nodesize = 10)
+  train1clus <- predict(classify, train1, type = "class")
+  train2clus <- predict(classify, train2, type = "class")
+  round(prop.table(table(actual = train1$cluster, pred = train1clus),1),2)
+  round(prop.table(table(actual = train2$cluster, pred = train2clus),1),2)
+  
+  accTrain1 <- sum(train1clus==train1$cluster)/nrow(train1); accTrain1
+  accTrain2 <- sum(train2clus==train2$cluster)/nrow(train2); accTrain2
 
 ```
-
-```{r}
-round(prop.table(table(train_clus4[,c(9)], train_clus4$cluster),1),2)
-
-success_pred <- glm(success~ actor_1_gender+ actor_2_gender+popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data = train, family = binomial(link = 'logit'))
-summary(success_pred)
-
-round(prop.table(table(actual = train$success,predicted = ifelse(predict(success_pred, train, type = 'response')>0.5,1,0)),1),2)
-round(prop.table(table(actual = test$success,predicted = ifelse(predict(success_pred, test, type = 'response')>0.5,1,0)),1),2)
-
-#table(actual = test$)
-
-```
-
-library(ggplot2)
-library(GGally)
-
-ggcorr(data_imp,angle = 0, nbreaks = 10,hjust = 1,size= 3.5,layout.exp = 1)
-
-
-ggplot(data.final, aes(x = revenue, color = actor_1_gender)) + geom_density()
-
-ggplot(data.final, aes(x = actor_1_gender, fill = revenue)) + geom_bar()
-table( data.final$actor_1_gender)
-par(mfrow = c(2,2))
-for (i in c("actor_1_gender","actor_2_gender","collection", "num_prod_comp" ,"num_prod_ctry", "success")){
-  barplot(eval(parse(text = paste0("data.final$",i))), data.final$revenue, xlab = i, )
-}
+  
+The accuracy of classification model for deciding clusters in low of small sized slusters. I would weight in this factor to decide between random forest and cluster wise regression result.  
 
