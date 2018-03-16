@@ -1,0 +1,254 @@
+---
+title: "pridct.rating"
+author: "Garima Sood"
+date: "March 14, 2018"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(Metrics)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+
+dataPath <- "C:/Users/garim/Documents/Quarter 2/Data Mining/Project/Merged data"
+master_data <- read.csv(paste(dataPath,"master_data_with_imputed_budget_and_revenue.csv", sep = "/"))
+```
+
+**Data Processsing**
+
+```{r}
+master_data$release_date <- as.Date(master_data$release_date)
+
+#To cut the impact of inflation on movie revenues & budgets, I am excluding data of movies released before Jan 1985
+
+master_data <- master_data[master_data$release_date > as.Date("01/01/1985","%m/%d/%Y"),]
+master_data <- master_data[master_data$budget > 0,]
+master_data$actor_1_gender <- as.factor(ifelse(master_data$actor_1_gender==0,NA,ifelse(master_data$actor_1_gender==2,1,0)))
+master_data$actor_2_gender <- as.factor(ifelse(master_data$actor_2_gender==0,NA,ifelse(master_data$actor_2_gender==2,1,0)))
+master_data$actor_3_gender <- as.factor(ifelse(master_data$actor_3_gender==0,NA,ifelse(master_data$actor_3_gender==2,1,0)))
+master_data$actor_4_gender <- as.factor(ifelse(master_data$actor_4_gender==0,NA,ifelse(master_data$actor_4_gender==2,1,0)))
+master_data$actor_5_gender <- as.factor(ifelse(master_data$actor_5_gender==0,NA,ifelse(master_data$actor_5_gender==2,1,0)))
+master_data$director_gender <- as.factor(ifelse(master_data$director_gender==0,NA,ifelse(master_data$director_gender==2,1,0)))
+master_data$producer_gender <- as.factor(ifelse(master_data$producer_gender==0,NA,ifelse(master_data$producer_gender==2,1,0)))
+master_data$collection <- as.factor(ifelse(nchar(as.character(master_data$belongs_to_collection))>0,1,0))
+
+master_data$num_prod_comp <-(master_data$production_company_1!="")+(master_data$production_company_2!="")+
+                            (master_data$production_company_3!="")
+
+master_data$num_prod_ctry <-(master_data$production_country_1!="")+(master_data$production_country_2!="")+
+                            (master_data$production_country_3!="")
+
+master_data$release_month <- month.abb[month(master_data$release_date)]
+
+master_data <- master_data[ , -which(names(master_data) %in% 
+              c( "movie_id" ,"actor_1_name","actor_2_name","actor_3_name","actor_4_name","actor_5_name","director_name","producer_name",
+                 "casting_gender","casting_name","belongs_to_collection","genre_2","genre_3","genre_4","production_company_1",
+                 "production_company_2","production_company_3" ,"production_country_1", "production_country_2",  "production_country_3" , "spoken_language_1","spoken_language_2", "spoken_language_3" ,"homepage","imdb_id" ,"original_title","overview","poster_path", "status","title","video"))]
+
+
+```
+
+Plots show that there are a lot of NA values in the different columns. Counting the NA values per column in the data
+
+```{r}
+perc_na <- function(x){
+  return(sum(is.na(x))/length(x))
+}
+
+round(apply(master_data, 2, function(x) perc_na(x)),2)
+
+master_data$na_count <- apply(master_data, 1, function(x) sum(is.na(x)))
+table(master_data$na_count)
+```
+
+Deleting records with missing data in more than 9 columns, and checking the poportion of missing values in the updated data set
+
+```{r}
+data <- master_data[master_data$na_count<9,]
+dim(data)
+
+round(apply(data, 2, function(x) perc_na(x)),2)
+```
+
+After removing thee records, we are left with about 10% missing values in the gender column of lead actors, and 24% missing values in budget. Rest of the columns look good. 
+
+Checking the distribution of our dependent variable (revenue)
+
+```{r}
+data$success <- (ifelse(data$revenue/data$budget >2,1,0))
+```
+
+Plot of budget & revenue
+```{r}
+ggplot(data,aes(budget,revenue,colour = success)) + geom_point()
+```
+
+I see a few outliers. But first I will impute the missing values and then remove the outliers if needed. 
+
+Missing value estimation:
+```{r}
+mean_impute <- function(x){
+  a<- (mean(x[!is.na(x)]))
+  x <- ifelse(is.na(x), a, x)
+  return(x)
+}
+
+median_impute <-  function(x){
+  a<- (median(x[!is.na(x)]))
+  x <- ifelse(is.na(x), a, x)
+  return(x)
+}
+
+mode_impute <-  function(x){
+  ux <- (unique(x))
+  a<-ux[which.max(tabulate(match(x[!is.na(x)], ux)))]
+  x <- ifelse(is.na(x), a, x)
+  return(x)
+}
+
+data.imp <-data
+
+#Imputing missing data in gender and runtime columns using mode and median respectively
+
+data.imp$actor_1_gender <- as.factor(mode_impute(data$actor_1_gender))
+data.imp$actor_2_gender <- as.factor(mode_impute(data$actor_2_gender))
+data.imp$runtime <- median_impute(data.imp$runtime)
+
+perc_blank <- function(x){
+  return(sum(x ==""|x==" ")/length(x))
+}
+round(apply(data.imp, 2, function(x) perc_blank(x)),2)
+
+```
+
+Removing the extreme revenue records
+```{r}
+sd.budget <- sqrt(var(data.imp$budget))
+sd.budget*6
+length(data.imp$budget[data.imp$budget>2e+08])
+data.imp <- data.imp[data.imp$budget<2e+08,]
+```
+
+```{r}
+data.final <-data.imp[,-which(names(data.imp) %in% c( "actor_2_gender", "actor_3_gender", "actor_4_gender", "actor_5_gender",  "director_gender", "producer_gender", 'na_count', 'genre_1', 'adult','tagline','original_language'))]
+data.final$actor_1_gender <- ifelse(data.final$actor_1_gender==1, "Female", "Male")
+data.final$collection <- ifelse(data.final$collection==1, "Yes", "No")
+
+
+#Splitting the data into test & train
+c <- round(nrow(data.final)*0.7,0)
+s <- sample(1:nrow(data.final), c)
+
+train <- data.final[s,]
+test <- data.final[-s,]
+```
+
+Building a model to predict success of the movie before it is released. I will not model the vote count and vote average variables as they are collected after the release of the movie.
+
+Build a multiple linear model for revenue prediction
+
+```{r}
+for (i in c("budget","popularity","runtime", "vote_average", "vote_count")){
+  assign(paste0("p",i),ggplot(data.final, aes(success, eval(parse(text = i))))+labs(y = i)+geom_bar(stat = "identity", color = "dark green"))
+}
+
+grid.arrange(pbudget,ppopularity,pruntime, pvote_average, pvote_count,nrow= 3,ncol = 2)
+ggplot(data=data.final, aes(x=success, y=..count..)) + geom_bar(aes(fill = collection), position = "dodge")
+ggplot(data=data.final, aes(x=success, y=..count..)) + geom_bar(aes(fill = actor_1_gender), position = "dodge")
+ggplot(data=data.final, aes(x=release_month, y=success)) + geom_bar(stat = 'identity', color = 'dark green')
+
+```
+
+Initial review of the graphs say that success of a movie is indicated by budget, popularity, runtime (suprisingly), movie belonging to a collectionand voting statistics
+
+Movie success is actually dependent on the month of launch! Larger proportion of movies released in the summer or late in the year are successful 
+
+**Fitting a logistic regression model**
+```{r}
+
+success_pred <- glm(success~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry+release_month, data = train, family = binomial(link = "logit"))
+summary(success_pred)
+
+yTr <- ifelse(success_pred$fitted.values>0.5,1,0)
+yTest <- ifelse(predict(success_pred,test, type = "response")>0.5,1,0)
+
+#confusion matrix for train data
+round(prop.table(table(actual = train$success, pred=yTr),1),2)
+accTr <- sum(train$success==yTr)/nrow(train)
+#confusion matrix for test data
+round(prop.table(table(actual = test$success, pred=yTest),1),2)
+accTest <- sum(test$success==yTest)/nrow(test)
+
+cbind(trainAcc=accTr, testAcc <- accTest)
+```
+
+This model shows a stable fit based on the confusion matrix of text and train data and their respective accuracies, but sensitivity of our model is low. I can try doing tree classification to account for interaction between different predictors
+
+**Fitting a classification tree model**
+
+```{r}
+success_tree <- rpart(success~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry+release_month, data = train, method = "class")
+
+plotcp(success_tree)
+
+# Retreive optimal cp value based on cross-validated error
+opt_index <- which.min(success_tree$cptable[, "xerror"])
+cp_opt <- success_tree$cptable[opt_index, "CP"]
+
+success_tree_opt <- prune(tree = success_tree, 
+                         cp = cp_opt)
+
+# Display the pruned tree results
+rpart.plot(x = success_tree_opt, yesno = 2, type = 1, extra = 1)
+```
+
+Looking at the accuracy and confusion matrix from tree model (test vs. train)
+```{r}
+
+yTr <- predict(success_tree_opt,train, type = "class")
+yTest <- predict(success_tree_opt,test, type = "class")
+
+#confusion matrix for train data
+round(prop.table(table(actual = train$success, pred=yTr),1),2)
+accTr <- sum(train$success==yTr)/nrow(train)
+#confusion matrix for test data
+round(prop.table(table(actual = test$success, pred=yTest),1),2)
+accTest <- sum(test$success==yTest)/nrow(test)
+
+cbind(trainAcc=accTr, testAcc <- accTest)
+
+```
+
+The fit of regression tree is similar to the logistic regression model. I will fit random forests to see if the accuracy can be improved further by bootstrapping: 
+
+```{r}
+train$success <- as.factor(train$success)
+test$success <- as.factor(test$success)
+train$release_month <- as.factor(train$release_month)
+test$release_month <- as.factor(test$release_month)
+train$collection <- as.factor(train$collection)
+test$collection <- as.factor(test$collection)
+train$actor_1_gender <- as.factor(train$actor_1_gender)
+test$actor_1_gender <- as.factor(test$actor_1_gender)
+success_rfor <- randomForest(success~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry+release_month, data= train, nodesize = 10)
+```
+
+```{r}
+success_rfor
+
+yTest <- predict(success_rfor,test, type = "class")
+
+
+#confusion matrix for test data
+round(prop.table(table(actual = test$success, pred=yTest),1),2)
+accTest <- sum(test$success==yTest)/nrow(test); accTest
+
+```
+
+

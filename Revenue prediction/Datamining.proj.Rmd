@@ -6,6 +6,16 @@ output: html_document
 ---
 
 ```{r}
+
+library(gridExtra)
+library(dplyr)
+library(lubridate)
+library(Metrics)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+
 dataPath <- "C:/Users/garim/Documents/Quarter 2/Data Mining/Project/Merged data"
 master_data <- read.csv(paste(dataPath,"master_data_with_imputed_budget_and_revenue.csv", sep = "/"))
 summary(master_data)
@@ -20,14 +30,14 @@ master_data$release_date <- as.Date(master_data$release_date)
 
 master_data <- master_data[master_data$release_date > as.Date("01/01/1985","%m/%d/%Y"),]
 master_data <- master_data[master_data$budget > 0,]
-master_data$actor_1_gender <- as.factor(ifelse(master_data$actor_1_gender==0,NA,ifelse(master_data$actor_1_gender==2,1,0)))
-master_data$actor_2_gender <- as.factor(ifelse(master_data$actor_2_gender==0,NA,ifelse(master_data$actor_2_gender==2,1,0)))
-master_data$actor_3_gender <- as.factor(ifelse(master_data$actor_3_gender==0,NA,ifelse(master_data$actor_3_gender==2,1,0)))
-master_data$actor_4_gender <- as.factor(ifelse(master_data$actor_4_gender==0,NA,ifelse(master_data$actor_4_gender==2,1,0)))
-master_data$actor_5_gender <- as.factor(ifelse(master_data$actor_5_gender==0,NA,ifelse(master_data$actor_5_gender==2,1,0)))
-master_data$director_gender <- as.factor(ifelse(master_data$director_gender==0,NA,ifelse(master_data$director_gender==2,1,0)))
-master_data$producer_gender <- as.factor(ifelse(master_data$producer_gender==0,NA,ifelse(master_data$producer_gender==2,1,0)))
-master_data$collection <- as.factor(ifelse(nchar(as.character(master_data$belongs_to_collection))>0,1,0))
+master_data$actor_1_gender <- as.factor(ifelse(master_data$actor_1_gender==0,NA,ifelse(master_data$actor_1_gender==2,"Male","Female")))
+master_data$actor_2_gender <- as.factor(ifelse(master_data$actor_2_gender==0,NA,ifelse(master_data$actor_2_gender==2,"Male","Female")))
+master_data$actor_3_gender <- as.factor(ifelse(master_data$actor_3_gender==0,NA,ifelse(master_data$actor_3_gender==2,"Male","Female")))
+master_data$actor_4_gender <- as.factor(ifelse(master_data$actor_4_gender==0,NA,ifelse(master_data$actor_4_gender==2,"Male","Female")))
+master_data$actor_5_gender <- as.factor(ifelse(master_data$actor_5_gender==0,NA,ifelse(master_data$actor_5_gender==2,"Male","Female")))
+master_data$director_gender <- as.factor(ifelse(master_data$director_gender==0,NA,ifelse(master_data$director_gender==2,"Male","Female")))
+master_data$producer_gender <- as.factor(ifelse(master_data$producer_gender==0,NA,ifelse(master_data$producer_gender==2,"Male","Female")))
+master_data$collection <- as.factor(ifelse(nchar(as.character(master_data$belongs_to_collection))>0,"Yes","No"))
 
 master_data$num_prod_comp <-(master_data$production_company_1!="")+(master_data$production_company_2!="")+
                             (master_data$production_company_3!="")
@@ -35,7 +45,6 @@ master_data$num_prod_comp <-(master_data$production_company_1!="")+(master_data$
 master_data$num_prod_ctry <-(master_data$production_country_1!="")+(master_data$production_country_2!="")+
                             (master_data$production_country_3!="")
 
-library(lubridate)
 master_data$release_month <- month.abb[month(master_data$release_date)]
 
 master_data <- master_data[ , -which(names(master_data) %in% 
@@ -58,7 +67,6 @@ p10<-ggplot(master_data, aes(x = popularity)) + geom_histogram()
 p11<-ggplot(master_data, aes(x = vote_average)) + geom_histogram()
 p12<-ggplot(master_data, aes(x = vote_count)) + geom_histogram()
 
-library(gridExtra)
 
 grid.arrange(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12, nrow = 4, ncol=3)
 ```
@@ -90,7 +98,7 @@ After removing thee records, we are left with about 10% missing values in the ge
 Checking the distribution of our dependent variable (revenue)
 
 ```{r}
-library(dplyr)
+
 data$quartile <- ntile(data$revenue, 5)
 size = as.matrix(table(data$quartile))
 cbind(aggregate(data$revenue, by = list(data$quartile), mean), size)
@@ -98,12 +106,6 @@ ggplot(data, aes(x = revenue)) + geom_histogram()
 
 ```
 
-Plot of budget & revenue
-```{r}
-plot(data$budget, data$revenue)
-```
-
-I see a few outliers. But first I will impute the missing values and then remove the outliers if needed. 
 
 Missing value estimation:
 ```{r}
@@ -141,7 +143,7 @@ round(apply(data.imp, 2, function(x) perc_blank(x)),2)
 
 ```
 
-Removing the extreme revenue records
+Removing the extreme budget records
 ```{r}
 sd.budget <- sqrt(var(data.imp$budget))
 sd.budget*6
@@ -151,7 +153,7 @@ data.imp <- data.imp[data.imp$budget<2e+08,]
 
 ```{r}
 data.final <-data.imp[,-which(names(data.imp) %in% c( "actor_2_gender", "actor_3_gender", "actor_4_gender", "actor_5_gender",  "director_gender", "producer_gender", 'na_count', 'genre_1', 'adult','tagline','original_language'))]
-data.final$success <- ifelse(data.final$revenue>1.25*(data.final$budget),1,0)
+data.final$actor_1_gender <- as.factor(ifelse(data.final$actor_1_gender==2, "Male", "Female"))
 
 #Splitting the data into test & train
 c <- round(nrow(data.final)*0.7,0)
@@ -166,10 +168,17 @@ Building a model to predict revenue of the movie before it is released. I will n
 Build a multiple linear model for revenue prediction
 
 ```{r}
-par(mfrow = c(2,3))
-for (i in c("budget","popularity","runtime", "vote_average", "vote_count")){
-  plot(data.final$revenue, eval(parse(text = paste0("data.final$",i))), ylab = i)
-}
+
+ggplot(data.final,aes(budget,revenue,colour = collection)) + geom_point()
+ggplot(data.final,aes(budget,revenue,colour = actor_1_gender)) + geom_point()
+ggplot(data.final,aes(popularity,revenue)) + geom_point()
+ggplot(data.final,aes(runtime,revenue)) + geom_point(color = "royal blue")
+ggplot(data.final,aes(vote_average,revenue)) + geom_point()
+ggplot(data.final,aes(vote_count,revenue)) + geom_point()
+ggplot(data.final,aes(num_prod_comp,revenue)) + geom_bar(stat = "identity", color = "sky blue")
+ggplot(data.final,aes(num_prod_ctry ,revenue)) + geom_bar(stat = "identity", color = "sky blue")
+ggplot(data=data.final, aes(x=release_month, y=revenue)) + geom_bar(stat = 'identity', color = 'sky blue')
+
 ```
 
 Cleary vote count has an increasing relationship with revenue as that indicates # people who went to watch the movie. But I cannot model vote average and vote count for predicting revenue as they are collected after the movie is released
@@ -177,10 +186,8 @@ Cleary vote count has an increasing relationship with revenue as that indicates 
 **Fitting a linear model**
 ```{r}
 
-revenue_pred <- lm(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data = train)
+revenue_pred <- lm(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data = train)
 summary(revenue_pred)
-
-library(Metrics)
 
 rmseTest <- rmse((predict(revenue_pred, test)),test$revenue)
 rmseTrain <-rmse((predict(revenue_pred, train)),train$revenue)
@@ -189,19 +196,21 @@ rmseTrain <-rmse((predict(revenue_pred, train)),train$revenue)
 cbind(rmseTrain, rmseTest)
 ```
 
-The linear model does not five a good fit and the resons could be:
+The linear model does not give a good fit and the resons could be:
+
 + interaction between variables e.g.: popularity is driven by actors, budget is driven by runtime- number of countries in which the movie is launched
+
 + Scatter plots do not show a perfect linear relationship between the dependent and independent variables
 
 **Fitting a regression tree model**
 to take into account the interactions between variables
 ```{r}
-library(rpart)
-library(rpart.plot)
-
 revenue_tree <- rpart(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget , data = train)
 
 plotcp(revenue_tree)
+x <- printcp(revenue_tree)
+
+rsq.rpart(revenue_tree)
 
 # Retreive optimal cp value based on cross-validated error
 opt_index <- which.min(revenue_tree$cptable[, "xerror"])
@@ -212,6 +221,8 @@ revenue_tree_opt <- prune(tree = revenue_tree,
 
 # Display the pruned tree results
 rpart.plot(x = revenue_tree_opt, yesno = 2, type = 1, extra = 1)
+
+rsq.rpart(revenue_tree_opt)
 ```
 
 Looking at the accuracy and confusion matrix from tree model (test vs. train)
@@ -224,6 +235,7 @@ rmseTrain <- rmse((train$revenue),predict(revenue_tree_opt, train))
 r_sqTest <- 1-rmseTest^2/var(test$revenue)
 r_sqTr <- 1-rmseTrain^2/var(train$revenue)
 
+
 a<- round(rbind(cbind(rmseTrain, rmseTest), cbind(r_sqTr, r_sqTest)),2)
 rownames(a)<- c("RMSE", "R-sq")
 colnames(a)<- c("Train", "Test")
@@ -234,7 +246,6 @@ a
 The fit of regression tree is similar to the linear regression model. I will fit random forests to see if the accuracy can be improved further by bootstrapping: 
 
 ```{r}
-library(randomForest)
 rfor1 <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+num_prod_ctry + budget, data= train)
 ```
 
@@ -273,7 +284,7 @@ for (i in c(20,25,30,35,40)){
 I will go with the node size 25. The model fit has clearly improved with random forests compared to the tree model
 
 ```{r}
-rfor.f <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data= train, nodesize = 25)
+rfor.f <- randomForest(revenue~ actor_1_gender+ popularity+runtime+collection+num_prod_comp+ budget, data= train, nodesize = 30)
 rfor.f$importance
 ```
 
@@ -340,7 +351,7 @@ clustreg.predict=function(results,newdat){
 Trying multiple clusters and assessing fits using approximated R-sq and RMSE
 ```{r}
 
-for (i in 2:4){
+for (i in 2:5){
   
   rev_clust<- clustreg(train[,c(5,1,2,3,6,9,10,11)],i,100,881,50)
   ypredTr<- clustreg.predict(rev_clust, train[,c(5,1,2,3,6,9,10,11)])
@@ -365,7 +376,7 @@ for (i in 2:4){
 
 ```
 
-Cluster wise regression is fitting really well. Based on the size of the clusters, I will choose the 3 cluster solution and clusters get thin beyond that.
+Cluster wise regression is fitting really well. Based on the size of the clusters, I will choose the 3 cluster solution as clusters get thin beyond that.
 
 ```{r}
 rev_clust3<- clustreg(train[,c(5,1,2,3,6,9,10,11)],3,100,881,50)
@@ -376,6 +387,7 @@ rev_clust3$result
 train_clus <- as.data.frame(cbind(train, cluster = rev_clust3$cluster))
 train_clus$cluster <- as.factor(train_clus$cluster)
 cbind(aggregate(train_clus[,c(2,5,3,6,7,8,10)], by = list(train_clus$cluster), mean), size = table(train_clus$cluster))
+ggplot(train_clus,aes(budget,revenue,colour = cluster)) + geom_point()
 ```
 
 Fitting a classification tree on train data to classify new datasets into clusters for revenue predictions through clusterwise regression results 
@@ -395,5 +407,5 @@ train2 <- train_clus[-s,]
 
 ```
   
-The accuracy of classification model for deciding clusters in low of small sized slusters. I would weight in this factor to decide between random forest and cluster wise regression result.  
+The accuracy of classification model for deciding clusters is low for small sized clusters. I would weigh in this factor to decide between random forest and cluster wise regression result. The accuracy of predicting revenue once the clusters are identified is very high but when combined with process of identifying the right clusters, expected accuracy drop close to that of random forests.
 
