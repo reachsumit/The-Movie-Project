@@ -6,7 +6,13 @@ output: html_document
 ---
 
 ```{r}
-
+install.packages("gridExtra")
+install.packages("dplyr")
+install.packages("lubridate")
+install.packages("Metrics")
+install.packages("rpart")
+install.packages("rpart.plot")
+install.packages("randomForest")
 library(gridExtra)
 library(dplyr)
 library(lubridate)
@@ -156,6 +162,8 @@ data.final <-data.imp[,-which(names(data.imp) %in% c( "actor_2_gender", "actor_3
 data.final$actor_1_gender <- as.factor(ifelse(data.final$actor_1_gender==2, "Male", "Female"))
 
 #Splitting the data into test & train
+data.final$budget <- scale(data.final$budget)
+
 c <- round(nrow(data.final)*0.7,0)
 s <- sample(1:nrow(data.final), c)
 
